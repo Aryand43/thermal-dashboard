@@ -3,3 +3,4 @@ ROI/
 *.zip
 *.png
 __pycache__/
+*.csv
