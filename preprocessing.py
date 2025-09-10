@@ -82,5 +82,39 @@ def process_all_images():
         cv2.imwrite(save_path, cropped)
         print(f"[SAVED] {save_path}")
 
+def guided_filter_and_unsharp_mask(image: np.ndarray) -> np.ndarray:
+    import time
+    start = time.time()
+
+    if len(image.shape) == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+
+    guide = image.copy()
+    filtered = cv2.ximgproc.guidedFilter(guide=guide, src=image, radius=6, eps=40, dDepth=-1)
+
+    sharp = cv2.addWeighted(image, 1.8, filtered, -0.8, 0)
+    print(f"Guided sharpening latency: {time.time() - start:.6f} seconds")
+    return np.clip(sharp, 0, 255).astype(np.uint8)
+
+def apply_edsr_and_lab_refinement(image: np.ndarray, model_path: str = 'EDSR_x4.pb', scale: int = 2) -> np.ndarray:
+    import time
+    start = time.time()
+
+    sr = cv2.dnn_superres.DnnSuperResImpl_create()
+    sr.readModel(model_path)
+    sr.setModel('edsr', scale)
+    upscaled = sr.upsample(image)
+
+    lab = cv2.cvtColor(upscaled, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = cv2.equalizeHist(cv2.GaussianBlur(l, (3, 3), 0))
+    sharpened = cv2.Laplacian(l, cv2.CV_64F)
+    l_final = cv2.addWeighted(l, 1.2, sharpened.astype(np.uint8), -0.2, 0)
+    final = cv2.merge((l_final, a, b))
+    upscaled_image = cv2.cvtColor(final, cv2.COLOR_LAB2BGR)
+
+    print(f"Super resolution latency: {time.time() - start:.6f} seconds")
+    return upscaled_image
+
 if __name__ == "__main__":
     process_all_images()
