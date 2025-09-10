@@ -1,79 +1,46 @@
 import streamlit as st
-import cv2
 import os
-import tempfile
-from PIL import Image
-import shutil
+import cv2
 import numpy as np
-import time
-from preprocessing import detect_thermal_zone, crop_to_zone
+import tempfile
+from preprocessing import detect_and_crop_thermal_zone
 
-st.set_page_config(page_title="Video Frame Extractor", layout="centered")
-st.title("Video Frame Extractor @ 80 FPS with Thermal ROI")
-st.write("Upload a video to extract frames every 1/80 seconds and detect/crop thermal regions.")
+st.set_page_config(page_title="Thermal ROI Extractor", layout="centered")
+st.title("Thermal ROI Extractor")
 
-uploaded_file = st.file_uploader("Upload video", type=["mp4", "mov"])
+OUTPUT_DIR = "ROI"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-if uploaded_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = tmp.name
+uploaded_file = st.file_uploader("Upload a thermal video", type=["mp4", "avi", "mov", "mkv"])
 
-    cap = cv2.VideoCapture(tmp_path)
+if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        video_path = tmp_file.name
 
-    if not cap.isOpened():
-        st.error("Failed to open video.")
-    else:
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps
-        st.success(f"Video duration: {duration:.2f} sec | FPS: {fps:.2f}")
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        frame_time_gap = 1 / 80
-        timestamps = [t for t in [i * frame_time_gap for i in range(int(duration * 80))] if t <= duration]
+    progress_bar = st.progress(0)
+    frame_display = st.empty()
+    saved_count = 0
 
-        roi_dir = "ROI"
-        os.makedirs(roi_dir, exist_ok=True)
+    for i in range(total_frames):
+        success, frame = cap.read()
+        if not success:
+            continue
 
-        saved = 0
-        detected = 0
-        progress = st.progress(0)
+        try:
+            roi = detect_and_crop_thermal_zone(frame)
+            save_path = os.path.join(OUTPUT_DIR, f"roi_{i:05d}.png")
+            cv2.imwrite(save_path, roi)
+            saved_count += 1
+            roi_preview = cv2.resize(roi, (256, 256))
+            frame_display.image(roi_preview, caption=f"Frame {i}", channels="BGR")
+        except Exception:
+            pass
 
-        for i, t in enumerate(timestamps):
-            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-            ret, frame = cap.read()
-            if not ret:
-                continue
-            try:
-                bbox = detect_thermal_zone(frame)
-                roi = crop_to_zone(frame, bbox)
-                frame_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(frame_rgb)
-                filename = os.path.join(roi_dir, f"roi_{detected:05d}.png")
-                img.save(filename)
-                detected += 1
-            except RuntimeError as e:
-                if debug:
-                    st.write(f"[Frame {i}] Skipped: {e}")
-                continue
-            except Exception as e:
-                if debug:
-                    st.write(f"[Frame {i}] Unexpected error: {e}")
-                continue
-    
-            saved += 1
-            progress.progress(i / len(timestamps))
+        progress_bar.progress((i + 1) / total_frames)
 
-        cap.release()
-        st.success(f"Scanned {saved} frames. Detected and saved {detected} thermal ROIs.")
-
-        st.subheader("Sample Cropped Thermal Zones:")
-        for i in range(min(detected, 5)):
-            img_path = os.path.join(roi_dir, f"roi_{i:05d}.png")
-            st.image(img_path, caption=f"ROI Frame {i}", use_column_width=True)
-
-        zip_path = os.path.join(roi_dir, "thermal_rois.zip")
-        shutil.make_archive(zip_path.replace(".zip", ""), 'zip', roi_dir)
-
-        with open(zip_path, "rb") as f:
-            st.download_button("Download All Cropped ROI Frames (.zip)", f, file_name="thermal_rois.zip")
+    cap.release()
+    st.write(f"Processed {saved_count} ROI frames. Saved to `{OUTPUT_DIR}/`.")
