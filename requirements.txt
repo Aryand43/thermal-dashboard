@@ -4,3 +4,8 @@ opencv-contrib-python
 opencv-python-headless
 Pillow
 numpy
+torch
+pandas
+numpy
+openpyxl
+matplotlib
